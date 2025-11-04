@@ -5,7 +5,7 @@ from pipeline import TOP_K_DEFAULT, top_queries, analyze_file, init_engine, ask
 
 # Build Gradio UI
 def ui():
-    with gr.Blocks() as demo:
+    with (gr.Blocks() as demo):
         gr.Image(
             "image/cdss-logo.png",
             show_label=False,
@@ -17,7 +17,8 @@ def ui():
                 ["MiniLM","OpenAI Embeddings"],
                 value="MiniLM",
                 label="Embedding Backend")
-            emb_model = gr.Textbox(
+            emb_model = gr.Dropdown(
+                ["sentence-transformers/all-MiniLM-L6-v2", "text-embedding-3-small"],
                 value="sentence-transformers/all-MiniLM-L6-v2",
                 label="Embed Model")
 
@@ -26,7 +27,11 @@ def ui():
                 ["Ollama", "OpenAI"],
                 value="Ollama",
                 label="LLM Backend")
-            llm_model = gr.Textbox(value="smollm:135m", label="LLM Model")
+            llm_model = gr.Dropdown(
+                ["smollm:135m", "mistral:7b", "gpt-3.5-turbo"],
+                value="mistral:7b",
+                label="LLM Model"
+            )
 
         with gr.Row():
             qbox = gr.Textbox(label="Question")
@@ -100,7 +105,7 @@ def ui():
                 "MiniLM",
                 "sentence-transformers/all-MiniLM-L6-v2",
                 "Ollama",
-                "smollm:135m"
+                "mistral:7b"
             ),
             inputs=[],
             outputs=[placeholder]

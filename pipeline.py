@@ -99,6 +99,12 @@ retriever = None
 summarizer = None
 qa_chain = None
 log = load_log()
+current_settings = {
+    "embed_backend": None,
+    "embed_model": None,
+    "llm_backend": None,
+    "llm_model": None
+}
 
 # Initialization function supporting Ollama and OpenAI
 def init_engine(embed_backend, embed_model, llm_backend, llm_model):
@@ -217,8 +223,26 @@ def ask(
             external response (str)
         '''
     global log
-    if retriever is None:
+    # if retriever is None:
+    #     init_engine(embed_backend, embed_model, llm_backend, llm_model)
+
+    needs_reload = (
+            retriever is None or
+            embed_backend != current_settings["embed_backend"] or
+            embed_model != current_settings["embed_model"] or
+            llm_backend != current_settings["llm_backend"] or
+            llm_model != current_settings["llm_model"]
+    )
+
+    if needs_reload:
+        print(f"Reinitializing engine with {llm_backend} - {llm_model}")
         init_engine(embed_backend, embed_model, llm_backend, llm_model)
+        current_settings.update({
+            "embed_backend": embed_backend,
+            "embed_model": embed_model,
+            "llm_backend": llm_backend,
+            "llm_model": llm_model
+        })
 
     retriever.search_kwargs = {"k": k}
     docs = retriever.invoke(query)
