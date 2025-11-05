@@ -1,12 +1,13 @@
 import os
 import json
+import re
+from pipeline.extraction_transformation import county_names
+from pipeline.load import denormalize_text
 from datetime import datetime
 from collections import defaultdict
 from langchain_community.embeddings import HuggingFaceEmbeddings, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import PromptTemplate
-# from langchain.text_splitter import RecursiveCharacterTextSplitter
-# from langchain.chains.combine_documents.map_reduce import create_map_reduce_chain
 from langchain_classic.chains.summarize import load_summarize_chain
 
 from langchain_classic.chains.llm import LLMChain
@@ -37,18 +38,30 @@ MAX_CHAR_LIMIT = 80000
 # Prompt template
 # we can imporve the template
 qa_prompt = PromptTemplate(
-    input_variables=["context","question","external","user_context"],
+    input_variables=["context", "question", "external", "user_context"],
     template="""
+You are a policy data analyst summarizing county self-assessment reports for the California Department of Social Services (CalWORKs).
+Use the information in the **context** to answer the **question** accurately, with correct statistics and clear comparisons.
+
+Guidelines:
+1. Follow the task described in the user context (e.g., single-county summary or multi-county comparison).
+2. Preserve all numeric values (%, $, counts) exactly as written — do not round or alter them.
+3. If comparing counties or statewide data, explicitly state which county has higher or lower values, and quantify the difference if possible.
+4. Use short, factual paragraphs or bullet points. 
+5. When multiple counties are involved, group findings under clear headers for each county or show a structured comparison table.
+6. Do not invent information. If the data is missing or unclear, state that directly.
+
 Context:
 {context}
 
-External Info:
+External Info (if available):
 {external}
 
-User Context:
+User Context (instructions and query type):
 {user_context}
 
-Question: {question}
+Question:
+{question}
 
 Answer:
 """
@@ -223,8 +236,6 @@ def ask(
             external response (str)
         '''
     global log
-    # if retriever is None:
-    #     init_engine(embed_backend, embed_model, llm_backend, llm_model)
 
     needs_reload = (
             retriever is None or
@@ -244,13 +255,50 @@ def ask(
             "llm_model": llm_model
         })
 
+    mentioned = [c for c in county_names if re.search(rf"\b{c}\b", query, re.IGNORECASE)]
+    if len(mentioned) == 1:
+        query_type = "single"
+    elif len(mentioned) > 1:
+        query_type = "multi"
+    else:
+        query_type = "unspecified"
+
     retriever.search_kwargs = {"k": k}
-    docs = retriever.invoke(query)
+
+    if query_type == "single":
+        county = mentioned[0]
+        filter_fn = lambda doc: doc.metadata.get("county", "").lower() == county.lower()
+        docs = [d for d in retriever.invoke(query) if filter_fn(d)]
+        summary = summarize_docs(docs)
+
+    elif query_type == "multi":
+        docs = retriever.invoke(query)
+        # Optional: group by county for later structured summary
+        docs_by_county = defaultdict(list)
+        for d in docs:
+            docs_by_county[d.metadata.get("county", "Unknown")].append(d)
+        # For each county, summarize its documents individually
+        county_summaries = []
+        for county, county_docs in docs_by_county.items():
+            summary_text = summarize_docs(county_docs)
+            county_summaries.append(f"County: {county}\n{summary_text}")
+        # Concatenate the county summaries into a structured context string
+        summary = "\n\n".join(county_summaries)
+    else:
+        docs = retriever.invoke(query)
+        summary = summarize_docs(docs)
+
+
     if not docs:
       # better communication to users?
-        return "No docs found.", "", ""
+        return f"No docs found. No relevant sections found for '{query}'. Try being specific", "", ""
 
-    summary = summarize_docs(docs)
+    task_instruction = {
+        "single": "Summarize the key findings for this county and note comparisons with statewide averages.",
+        "multi": "Compare and contrast the findings between the mentioned counties. Summarize the key findings for these counties",
+        "unspecified": "Provide a concise summary based on the context."
+    }[query_type]
+
 
     external = ""
     if use_ext:
@@ -266,10 +314,9 @@ def ask(
         "context": clean_text(summary),
         "question": clean_text(query),
         "external": clean_text(external),
-        "user_context": f'''Counties: {', '.join(
-            {d.metadata.get('county','') for d in docs})
-            }'''
+        "user_context": f"Query type: {query_type}. {task_instruction} | Counties: {', '.join(mentioned) or 'unspecified'}"
     })
+    resp = denormalize_text(resp)
 
     t = datetime.now().isoformat()
     log[t] = {"query": query}

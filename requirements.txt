@@ -13,6 +13,8 @@ plotly>=5.15.0
 python-dotenv>=1.0.0
 requests>=2.31.0
 gradio == 5.49.1
+openpyxl == 3.1.5
+PyMuPDF == 1.26.5
 
 
 langchain-core~=1.0.2

@@ -1,6 +1,6 @@
 import gradio as gr
 from GIS_map import OUTCOME_METRICS, plot_outcome_map, COUNTIES
-from pipeline import TOP_K_DEFAULT, top_queries, analyze_file, init_engine, ask
+from application import TOP_K_DEFAULT, top_queries, analyze_file, init_engine, ask
 
 
 # Build Gradio UI
