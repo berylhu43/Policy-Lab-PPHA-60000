@@ -79,10 +79,16 @@ _safe_download("sentiment/vader_lexicon", "vader_lexicon")
 # 1. USER CONFIG
 # ----------------------------------------------------
 # ZIP → 'CalWORKs data_extracted' folder
-ZIP_PATH = r"C:\Users\nfnfh\OneDrive\Desktop\Python\CalWORKs data.zip"  # edit if needed
+ZIP_PATH = r'/Users/cyrillefougere/Desktop/CalWORKs data.zip'  # edit if needed
 BASE_DIR = _Path(ZIP_PATH).parent
 EXTRACT_DIR = BASE_DIR / "CalWORKs data_extracted"
 os.makedirs(EXTRACT_DIR, exist_ok=True)
+
+print("=== Vérification des chemins ===")
+print("ZIP exists:", _Path(ZIP_PATH).exists())
+print("Extract dir:", EXTRACT_DIR)
+print("Output dir:", OUTPUT_DIR)
+print("===============================")
 
 # 1) Extract ZIP once
 if (not any(EXTRACT_DIR.rglob("*"))) and _Path(ZIP_PATH).exists():
@@ -96,7 +102,7 @@ print("🔍 Files to analyze:")
 for f in pdf_files:
     print(" -", f.relative_to(EXTRACT_DIR))
 
-OUTPUT_DIR = BASE_DIR / "output"
+OUTPUT_DIR = BASE_DIR / "Word Clouds Update"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 print(f"\n📂 Output: {OUTPUT_DIR}\n")
 
