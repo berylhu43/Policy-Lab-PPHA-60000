@@ -15,7 +15,7 @@
 import os
 import re
 import zipfile
-from pathlib import Path as _Path
+from pathlib import Path
 from collections import Counter
 
 import numpy as np
@@ -105,7 +105,7 @@ _safe_download("sentiment/vader_lexicon", "vader_lexicon")
 
 # Path to ZIP file containing CalWORKs CSAs
 ZIP_PATH = r'/Users/cyrillefougere/Desktop/CalWORKs data.zip'  # Edit if needed
-BASE_DIR = _Path(ZIP_PATH).parent
+BASE_DIR = Path(ZIP_PATH).parent
 
 # Folder where ZIP will be extracted
 EXTRACT_DIR = BASE_DIR / "CalWORKs data_extracted"
@@ -119,7 +119,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # 1.2 Sanity check of paths
 # -------------------------------
 print("=== Path Verification ===")
-print("ZIP exists:", _Path(ZIP_PATH).exists())
+print("ZIP exists:", Path(ZIP_PATH).exists())
 print("Extract dir:", EXTRACT_DIR)
 print("Output dir:", OUTPUT_DIR)
 print("=========================")
@@ -127,7 +127,7 @@ print("=========================")
 # -------------------------------
 # 1.3 Extract ZIP once (if not already extracted)
 # -------------------------------
-if (not any(EXTRACT_DIR.rglob("*"))) and _Path(ZIP_PATH).exists():
+if (not any(EXTRACT_DIR.rglob("*"))) and Path(ZIP_PATH).exists():
     with zipfile.ZipFile(ZIP_PATH, 'r') as zip_ref:
         zip_ref.extractall(EXTRACT_DIR)
 print(f"Extracted ZIP to: {EXTRACT_DIR}")
@@ -172,7 +172,7 @@ except Exception:
 
 
 # 2.2 Lightweight OCR for first `max_pages` of PDF
-def _ocr_pdf_pages_to_text(path: _Path, max_pages: int = 5) -> str:
+def _ocr_pdf_pages_to_text(path: Path, max_pages: int = 5) -> str:
     """
     Rasterize the first `max_pages` of a PDF and extract text via OCR.
     
@@ -212,7 +212,7 @@ def _ocr_pdf_pages_to_text(path: _Path, max_pages: int = 5) -> str:
 
 
 # 2.3 PDF Reader with multiple fallback methods
-def read_pdf_text(path: _Path) -> str:
+def read_pdf_text(path: Path) -> str:
     """
     Read text from a PDF using the following fallback chain:
     pdfplumber → PyMuPDF (fitz) → PyPDF2 → OCR (first few pages).
@@ -283,7 +283,7 @@ def read_pdf_text(path: _Path) -> str:
 
 
 # 2.4 DOCX Reader with python-docx → docx2txt fallback
-def read_docx_text(path: _Path) -> str:
+def read_docx_text(path: Path) -> str:
     """
     Extract text from a DOCX file, falling back from python-docx to docx2txt.
     
@@ -318,7 +318,7 @@ def read_docx_text(path: _Path) -> str:
 
 
 # 2.5 Dispatch function to read any text file
-def read_any_text(path: _Path) -> str:
+def read_any_text(path: Path) -> str:
     """
     Dispatch text reading by file extension.
     
@@ -972,7 +972,7 @@ def build_probe_prompt(county: str, theme_scores: dict[str, dict[str, float]], w
 # 8A. MAIN ANALYSIS (Top-20 WordClouds + Sentence-level Sentiment)
 # ----------------------------------------------------
 
-def analyze_reports(file_paths: list[_Path], output_dir: _Path) -> dict:
+def analyze_reports(file_paths: list[Path], output_dir: Path) -> dict:
     """
     Analyze a collection of county PDF/DOCX reports.
 
@@ -1000,7 +1000,7 @@ def analyze_reports(file_paths: list[_Path], output_dir: _Path) -> dict:
     statewide_tokens = []
 
     for path in file_paths:
-        path = _Path(path)
+        path = Path(path)
         county = infer_county_name(str(path))
         print(f"\n=== Processing {county} ===")
 
@@ -1105,7 +1105,7 @@ def interpret_sentiment(score: float) -> str:
         return "strength-oriented tone (successes/improvements)"
 
 
-def plot_sentiment_bar(sentiment_avg: float, outpath: _Path, title: str | None = None) -> None:
+def plot_sentiment_bar(sentiment_avg: float, outpath: Path, title: str | None = None) -> None:
     """
     Save a simple vertical bar plot representing overall sentiment (–1..1).
 
@@ -1212,7 +1212,7 @@ def compute_word_level_sentiment(
 
 def plot_word_sentiment_bar(
     word_sent_df: pd.DataFrame,
-    outpath: _Path,
+    outpath: Path,
     title: str | None = None
 ) -> None:
     """
@@ -1292,42 +1292,58 @@ if __name__ == "__main__":
     Executes the full county-level + statewide report generation.
     """
 
+    from pathlib import Path
+    import os
+
     # --- Step 1. Prepare inputs ---
     try:
-        # Convert PDF file paths to strings (absolute paths)
-        FILE_PATHS = [str(p) for p in pdf_files]
+        FILE_PATHS = [str(p) for p in pdf_files]  # Liste de fichiers PDF
     except NameError:
         raise RuntimeError(
             "Variable 'pdf_files' not defined. Ensure input PDF list is initialized before running."
         )
 
-    # Ensure output directory exists
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # Convert OUTPUT_DIR to Path
+    OUTPUT_DIR = Path(OUTPUT_DIR)
 
-    print("🚀 Launching full analysis pipeline...")
+    # Ensure output directory exists
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)  # plus sûr que os.makedirs
+
+    print("Launching full analysis pipeline...")
     print(f"Total files to analyze: {len(FILE_PATHS)}")
     print(f"Output directory: {OUTPUT_DIR}\n")
 
     # --- Step 2. Run main analysis ---
-    results = analyze_reports(FILE_PATHS, str(OUTPUT_DIR))
+    results = analyze_reports(FILE_PATHS, OUTPUT_DIR)  # <-- passer le Path, pas str()
 
     # --- Step 3. Print per-county summary ---
     print("==== County Summary (Collapsed Tokens) ====")
-    for county, info in results.get("counties", {}).items():
+    for county, info in results.items():
+        # Skip non-county entries
+        if not isinstance(info, dict) or "sentiment_score" not in info:
+            continue
+
         print(f"\n[{county}]")
         print(f"Sentiment: {info['sentiment_score']:.3f} → {info['sentiment_label']}")
-        print("Top challenge themes:",
-              ", ".join(info["challenge_themes"]) if info["challenge_themes"] else "N/A")
-        print("Top context themes:",
-              ", ".join(info["context_themes"]) if info["context_themes"] else "N/A")
+        print("Top challenge themes:", ", ".join(info.get("top_challenges", [])) or "N/A")
+        print("Top context themes:", ", ".join(info.get("top_context", [])) or "N/A")
         print("Top terms (collapsed):")
-        for row in info.get("top_terms", [])[:5]:
-            print(f" - {row['word']} (freq={row['freq']})")
+        freq_table = info.get("freq_table")
+        if freq_table is not None and not freq_table.empty:
+            for _, row in freq_table.head(5).iterrows():
+                print(f" - {row['word']} (freq={row['freq']})")
+        else:
+            print(" - N/A")
 
-    # --- Step 4. Statewide sentiment summary ---
-    state_sent = results.get("statewide_sentiment", None)
-    if state_sent is not None:
-        print(f"\nStatewide sentiment (collapsed): {state_sent:.3f}")
+    # --- Step 4. Statewide sentiment summary (optional) ---
+    statewide_sentiments = [
+        info['sentiment_score'] 
+        for info in results.values()
+        if isinstance(info, dict) and 'sentiment_score' in info
+    ]
+    if statewide_sentiments:
+        avg_sentiment = sum(statewide_sentiments) / len(statewide_sentiments)
+        print(f"\nStatewide sentiment (average across counties): {avg_sentiment:.3f}")
     else:
         print("\nStatewide sentiment not available.")
 
