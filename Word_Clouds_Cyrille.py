@@ -1029,21 +1029,17 @@ def build_probe_prompt(county: str, theme_scores: dict[str, dict[str, float]], w
 
     return f"Key areas to probe for {county}:\n" + "\n".join(bullet_lines)
 
-
 # ----------------------------------------------------
-# 8A. MAIN ANALYSIS (Top-20 WordClouds + Sentence-level Sentiment)
+# 8. MAIN ANALYSIS + SENTIMENT (WordClouds + Sentence-level + Word-level)
 # ----------------------------------------------------
-
 def analyze_reports(file_paths: list[Path], output_dir: Path) -> dict:
     """
-    Analyze a collection of county PDF/DOCX reports.
-
-    Steps:
+    Full county report analysis pipeline:
     - Read and clean text
-    - Compute token frequencies and top-20 WordClouds
+    - Compute token frequencies and WordClouds (Top-20)
     - Extract thematic keywords
-    - Compute overall and per-sentence sentiment
-    - Export per-county CSV summaries
+    - Compute overall sentiment and per-word sentiment (with plots)
+    - Export CSV summaries and figures
 
     Parameters
     ----------
@@ -1055,7 +1051,7 @@ def analyze_reports(file_paths: list[Path], output_dir: Path) -> dict:
     Returns
     -------
     dict
-        Results by county (tokens, sentiment, stats, etc.).
+        Results by county (tokens, sentiment, stats, figures, etc.).
     """
     sia = SentimentIntensityAnalyzer()
     results = {}
@@ -1070,20 +1066,12 @@ def analyze_reports(file_paths: list[Path], output_dir: Path) -> dict:
         raw_text = read_any_text(path)
         print(f"[INFO] Extracted {len(raw_text)} characters from {county}.")
 
-        # --- Tokenization and normalization ---
+        # --- Tokenization & canonical collapse ---
         tokens = clean_and_tokenize(raw_text)
         tokens_collapsed = collapse_tokens_to_canon(tokens)
         statewide_tokens.extend(tokens_collapsed)
 
-        # --- Sentiment analysis ---
-        sent_score = compute_sentiment_sentence_avg(raw_text, sia)
-        sent_label = interpret_sentiment(sent_score)
-
-        # --- Thematic highlights ---
-        top_challenges = extract_policy_themes(tokens, CHALLENGE_TERMS, top_n=5)
-        top_context = extract_policy_themes(tokens, CONTEXT_TERMS, top_n=5)
-
-        # --- Frequency analysis and WordCloud ---
+        # --- Frequency stats & WordCloud ---
         stats_df = compute_word_stats(tokens_collapsed)
         csv_out = output_dir / f"stats_{county}_collapsed.csv"
         stats_df.head(200).to_csv(csv_out, index=False)
@@ -1097,253 +1085,88 @@ def analyze_reports(file_paths: list[Path], output_dir: Path) -> dict:
             top_n=20,
         )
 
+        # --- Overall sentiment (sentence-level) ---
+        sentences = [s.strip() for s in nltk.sent_tokenize(raw_text) if len(s.strip()) >= 5]
+        sent_scores = [sia.polarity_scores(s)["compound"] for s in sentences]
+        sent_score = float(np.mean(sent_scores)) if sent_scores else 0.0
+
+        # --- Sentiment interpretation ---
+        if sent_score < 0.05:
+            sent_label = "problem-focused tone (risks/gaps/barriers)"
+        elif sent_score < 0.15:
+            sent_label = "mixed tone (barriers & solutions)"
+        else:
+            sent_label = "strength-oriented tone (successes/improvements)"
+
+        # --- Plot overall sentiment ---
+        sent_bar_out = output_dir / f"sentiment_{county}.png"
+        fig = plt.figure(figsize=(4, 5))
+        ax = fig.add_subplot(111)
+        ax.bar([0], [sent_score], color="skyblue", edgecolor="black")
+        ax.set_ylim(-1, 1)
+        ax.set_xticks([0])
+        ax.set_xticklabels(["sentiment"])
+        ax.axhline(0, lw=1, color="gray")
+        ax.set_ylabel("VADER compound (–1..1)")
+        ax.set_title(f"{county} – Overall Sentiment")
+        plt.tight_layout()
+        plt.savefig(sent_bar_out, dpi=300)
+        plt.close(fig)
+        print(f"📁 Saved overall sentiment bar → {sent_bar_out.name}")
+
+        # --- Per-word sentiment (Top-20) ---
+        top_words = list(stats_df.head(20)["word"].values)
+        word_rows = []
+        sent_token_sets = [set(collapse_tokens_to_canon(clean_and_tokenize(s))) for s in sentences]
+        for w in top_words:
+            relevant_scores = [sc for toks, sc in zip(sent_token_sets, sent_scores) if w in toks]
+            avg_sent = float(np.mean(relevant_scores)) if relevant_scores else np.nan
+            word_rows.append({"word": w, "avg_sentiment": avg_sent, "n_sentences": len(relevant_scores)})
+        word_sent_df = pd.DataFrame(word_rows)
+
+        # --- Plot per-word sentiment ---
+        word_sent_out = output_dir / f"word_sentiment_{county}.png"
+        x = word_sent_df["word"].values
+        y = word_sent_df["avg_sentiment"].fillna(0).values
+        counts = word_sent_df["n_sentences"].values
+
+        fig = plt.figure(figsize=(max(8, len(x)*0.6), 5))
+        ax = fig.add_subplot(111)
+        ax.bar(range(len(x)), y, color="skyblue", edgecolor="black")
+        ax.set_ylim(-1, 1)
+        ax.axhline(0, lw=1, color="gray")
+        ax.set_xticks(range(len(x)))
+        ax.set_xticklabels(x, rotation=45, ha="right")
+        ax.set_ylabel("Avg sentence sentiment (VADER)")
+        ax.set_xlabel("Top frequent words")
+        for i, (val, n) in enumerate(zip(y, counts)):
+            ax.text(i, float(val) + (0.02 if val >= 0 else -0.05), f"n={int(n)}", ha="center",
+                    va="bottom" if val >=0 else "top", fontsize=8)
+        ax.set_title(f"{county} – Word-level Sentiment")
+        plt.tight_layout()
+        plt.savefig(word_sent_out, dpi=300)
+        plt.close(fig)
+        print(f"📁 Saved per-word sentiment bar → {word_sent_out.name}")
+
+        # --- Thematic highlights ---
+        top_challenges = extract_policy_themes(tokens, CHALLENGE_TERMS, top_n=5)
+        top_context = extract_policy_themes(tokens, CONTEXT_TERMS, top_n=5)
+
         # --- Compile results ---
         results[county] = {
             "tokens": tokens_collapsed,
-            "sentiment_score": sent_score,
-            "sentiment_label": sent_label,
+            "freq_table": stats_df,
             "top_challenges": top_challenges,
             "top_context": top_context,
-            "freq_table": stats_df,
+            "sentiment_score": sent_score,
+            "sentiment_label": sent_label,
+            "sent_bar_png": sent_bar_out,
+            "word_sentiment": word_sent_df,
+            "word_sent_png": word_sent_out,
         }
 
-    print("\nCompleted report analysis for all counties.")
+    print("\n✅ Completed report analysis for all counties.")
     return results
-
-# ----------------------------------------------------
-# 8B. SENTIMENT ANALYSIS BLOCK (Separated)
-#      - Sentence-level average sentiment
-#      - Tone interpretation
-#      - Overall sentiment bar plot
-#      - Per-word sentiment estimation
-# ----------------------------------------------------
-
-def compute_sentiment_sentence_avg(raw_text: str, sia) -> float:
-    """
-    Compute the average VADER compound score across all valid sentences.
-
-    Parameters
-    ----------
-    raw_text : str
-        Full document text.
-    sia : nltk.sentiment.SentimentIntensityAnalyzer
-        Pre-initialized VADER sentiment analyzer.
-
-    Returns
-    -------
-    float
-        Mean compound sentiment score in [-1, 1].
-        Returns 0.0 if no valid sentences are found.
-    """
-    sentences = nltk.sent_tokenize(raw_text)
-    scores = []
-    for sent in sentences:
-        sent = sent.strip()
-        if len(sent) < 5:  # Skip very short fragments
-            continue
-        scores.append(sia.polarity_scores(sent)["compound"])
-    return (sum(scores) / len(scores)) if scores else 0.0
-
-
-def interpret_sentiment(score: float) -> str:
-    """
-    Convert an average sentiment score into a qualitative label.
-
-    Parameters
-    ----------
-    score : float
-        VADER compound score (−1 to +1).
-
-    Returns
-    -------
-    str
-        Human-readable tone interpretation.
-    """
-    if score < 0.05:
-        return "problem-focused tone (risks/gaps/barriers)"
-    elif score < 0.15:
-        return "mixed tone (barriers & solutions)"
-    else:
-        return "strength-oriented tone (successes/improvements)"
-
-
-def plot_sentiment_bar(sentiment_avg: float, outpath: Path, title: str | None = None) -> None:
-    """
-    Save a simple vertical bar plot representing overall sentiment (–1..1).
-
-    Parameters
-    ----------
-    sentiment_avg : float
-        Average document sentiment.
-    outpath : Path
-        Output path for the PNG figure.
-    title : str, optional
-        Plot title.
-    """
-    import matplotlib
-    matplotlib.use("Agg")  # Ensure non-interactive backend
-
-    fig = plt.figure(figsize=(4, 5))
-    ax = fig.add_subplot(111)
-    ax.bar([0], [sentiment_avg], color="skyblue", edgecolor="black")
-    ax.set_ylim(-1, 1)
-    ax.set_xticks([0])
-    ax.set_xticklabels(["sentiment"])
-    ax.axhline(0, lw=1, color="gray")
-    ax.set_ylabel("VADER compound (–1..1)")
-    if title:
-        ax.set_title(title)
-
-    plt.tight_layout()
-    print(f"📁 Saving sentiment bar: {outpath}")
-    plt.savefig(outpath, dpi=300)
-    plt.close(fig)
-
-
-def _sentence_tokens_canonical(sentence: str) -> set[str]:
-    """
-    Tokenize and normalize a sentence, collapsing tokens to canonical forms.
-
-    Ensures consistent token treatment across the frequency table
-    and sentiment computations.
-
-    Parameters
-    ----------
-    sentence : str
-        Raw sentence text.
-
-    Returns
-    -------
-    set[str]
-        Canonicalized tokens (unique within the sentence).
-    """
-    tokens = clean_and_tokenize(sentence)
-    return set(collapse_tokens_to_canon(tokens))
-
-
-def compute_word_level_sentiment(
-    raw_text: str,
-    freq_df: pd.DataFrame,
-    top_n: int = 20,
-    sia: SentimentIntensityAnalyzer | None = None
-) -> pd.DataFrame:
-    """
-    Compute average sentence-level sentiment for each of the Top-N frequent words.
-
-    Parameters
-    ----------
-    raw_text : str
-        Full document text.
-    freq_df : pd.DataFrame
-        Frequency table (with 'word' and 'count' columns).
-    top_n : int, default=20
-        Number of top words to analyze.
-    sia : SentimentIntensityAnalyzer, optional
-        Existing analyzer instance; creates one if not provided.
-
-    Returns
-    -------
-    pd.DataFrame
-        Columns: ["word", "avg_sentiment", "n_sentences"].
-    """
-    if sia is None:
-        sia = SentimentIntensityAnalyzer()
-
-    if freq_df is None or freq_df.empty:
-        return pd.DataFrame(columns=["word", "avg_sentiment", "n_sentences"])
-
-    # --- Select Top-N canonical words ---
-    top_words = list(freq_df.head(top_n)["word"].values)
-
-    # --- Tokenize into sentences and precompute per-sentence data ---
-    sentences = [s.strip() for s in nltk.sent_tokenize(raw_text) if len(s.strip()) >= 5]
-    sent_token_sets = [_sentence_tokens_canonical(s) for s in sentences]
-    sent_scores = [sia.polarity_scores(s)["compound"] for s in sentences]
-
-    # --- Aggregate sentiment per word ---
-    rows = []
-    for w in top_words:
-        relevant_scores = [
-            sc for stoks, sc in zip(sent_token_sets, sent_scores) if w in stoks
-        ]
-        avg_sent = (sum(relevant_scores) / len(relevant_scores)) if relevant_scores else np.nan
-        rows.append({"word": w, "avg_sentiment": avg_sent, "n_sentences": len(relevant_scores)})
-
-    return pd.DataFrame(rows)
-
-
-def plot_word_sentiment_bar(
-    word_sent_df: pd.DataFrame,
-    outpath: Path,
-    title: str | None = None
-) -> None:
-    """
-    Plot average sentence sentiment per Top-N word as a labeled bar chart.
-
-    Parameters
-    ----------
-    word_sent_df : pd.DataFrame
-        DataFrame with columns ["word", "avg_sentiment", "n_sentences"].
-    outpath : Path
-        Output path for saved PNG.
-    title : str, optional
-        Plot title.
-    """
-    if word_sent_df is None or word_sent_df.empty:
-        print(f"[WARN] No per-word sentiment data available for {outpath}.")
-        return
-
-    # --- Clean and convert numeric fields ---
-    plot_df = word_sent_df.copy()
-    plot_df["avg_sentiment"] = pd.to_numeric(plot_df["avg_sentiment"], errors="coerce").fillna(0.0)
-    plot_df["n_sentences"] = (
-        pd.to_numeric(plot_df["n_sentences"], errors="coerce").fillna(0).astype(int)
-    )
-
-    x = plot_df["word"].values
-    y = plot_df["avg_sentiment"].values
-    counts = plot_df["n_sentences"].values
-
-    if len(x) == 0:
-        print(f"[WARN] No valid words to plot for {outpath}.")
-        return
-
-    # --- Non-interactive backend for safe file export ---
-    import matplotlib
-    matplotlib.use("Agg")
-
-    # --- Build the figure ---
-    fig = plt.figure(figsize=(max(8, len(x) * 0.6), 5))
-    ax = fig.add_subplot(111)
-    ax.bar(range(len(x)), y, color="skyblue", edgecolor="black")
-    ax.set_ylim(-1, 1)
-    ax.axhline(0, lw=1, color="gray")
-    ax.set_xticks(range(len(x)))
-    ax.set_xticklabels(x, rotation=45, ha="right")
-    ax.set_ylabel("Avg sentence sentiment (VADER)")
-    ax.set_xlabel("Top frequent words")
-
-    # --- Annotate with sentence counts ---
-    for i, (val, n) in enumerate(zip(y, counts)):
-        try:
-            ax.text(
-                i,
-                float(val) + (0.02 if val >= 0 else -0.05),
-                f"n={int(n)}",
-                ha="center",
-                va="bottom" if val >= 0 else "top",
-                fontsize=8,
-            )
-        except Exception:
-            continue  # Safeguard against NaN values
-
-    if title:
-        ax.set_title(title)
-
-    plt.tight_layout()
-    print(f"📁 Saving per-word sentiment bar: {outpath}")
-    plt.savefig(outpath, dpi=300)
-    plt.close(fig)
 
 # ----------------------------------------------------
 # 9. RUN SCRIPT (entry point)
