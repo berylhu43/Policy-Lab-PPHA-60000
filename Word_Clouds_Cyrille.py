@@ -393,7 +393,7 @@ def build_stopwords() -> set:
         "ore", "ota", "partner", "partners", "participant", "participants", "programmatic",
         "provider", "providers", "recipient", "recipients", "sfhsa", "specialist", "specialists",
         "staff", "staffed", "staffing", "system", "tad", "team", "teams", "ts", "unit", "units",
-        "vendor", "vendors", "vchsa", "ychhsd", "welfare", "wex"
+        "vendor", "vendors", "vchsa", "ychhsd", "welfare", "wex", "ssd", "tws"
     }   
 
     # 3.3 Geographic terms (generic + county tokens)
