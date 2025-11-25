@@ -1,98 +1,127 @@
 import gradio as gr
 from GIS_map import OUTCOME_METRICS, plot_outcome_map, COUNTIES
-from application import TOP_K_DEFAULT, top_queries, analyze_file, init_engine, ask
+from application import TOP_K_DEFAULT, top_queries, init_engine, ask
 
 
 # Build Gradio UI
 def ui():
-    with (gr.Blocks() as demo):
+    with gr.Blocks() as demo:
+        gr.HTML("""
+        <style>
+          body { 
+              background-color: #1e1e1e !important; 
+              color: #e8e8e8 !important;
+          }
+
+          .main-title { 
+              font-size: 32px; 
+              font-weight: 700; 
+              margin-bottom: 10px; 
+              color: #ffffff;
+          }
+
+          .section-box {
+              background: #2a2a2a;
+              padding: 18px;
+              border-radius: 10px;
+              border: 1px solid #3a3a3a;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+              margin-bottom: 18px;
+          }
+
+          /* The answer area */
+          .answer-box {
+              background: #2f3136;
+              border-radius: 10px;
+              padding: 20px;
+              font-size: 18px;
+              line-height: 1.6;
+              border: 1px solid #3a3a3a;
+              min-height: 200px;
+              color: #ffffff;
+              white-space: pre-wrap;
+          }
+
+          /* Placeholder text */
+          .answer-box em {
+              color: #9aa0a6;
+          }
+
+          /* Fix Gradio dark text issues */
+          label, .gradio-container * {
+              color: #e8e8e8 !important;
+          }
+
+          input, textarea, select {
+              background-color: #2a2a2a !important;
+              color: #ffffff !important;
+              border: 1px solid #3a3a3a !important;
+          }
+
+          .gr-button {
+              background-color: #4b5563 !important;
+              color: white !important;
+              border-radius: 8px !important;
+              border: none !important;
+          }
+
+          .gr-button:hover {
+              background-color: #6b7280 !important;
+          }
+        </style>
+        """)
         gr.Image(
             "image/cdss-logo.png",
             show_label=False,
             width=500)
-        gr.Markdown("### CalWORKs County QA System")
+        gr.HTML("<div class='main-title'>CalWORKs County QA System</div>")
 
-        with gr.Row():
-            emb_dd = gr.Dropdown(
-                ["MiniLM","OpenAI Embeddings"],
-                value="MiniLM",
-                label="Embedding Backend")
-            emb_model = gr.Dropdown(
-                ["sentence-transformers/all-MiniLM-L6-v2", "text-embedding-3-small", "BAAI/bge-m3"],
-                value="BAAI/bge-m3",
-                label="Embed Model")
-
-        with gr.Row():
-            llm_dd = gr.Dropdown(
-                ["Ollama", "OpenAI"],
-                value="Ollama",
-                label="LLM Backend")
-            llm_model = gr.Dropdown(
-                ["mistral:7b", "gpt-3.5-turbo"],
-                value="mistral:7b",
-                label="LLM Model"
-            )
-
-        with gr.Row():
-            qbox = gr.Textbox(label="Question")
-            extbox = gr.Textbox(label="Web Search Query")
-            extflag = gr.Checkbox(label="Include Web Search", value=False)
-            topk = gr.Slider(1,20,value=TOP_K_DEFAULT,label="Top K")
-            go = gr.Button("Answer")
-
-        answer = gr.Textbox(label="Answer", lines=10)
-        topq = gr.Textbox(label="Top Queries", lines=10)
-        extinfo = gr.Textbox(label="External Info", lines=10)
-
-        go.click(ask,
-                inputs=[
-                    qbox,
-                    topk,
-                    extflag,
-                    extbox,
-                    emb_dd,
-                    emb_model,
-                    llm_dd,
-                    llm_model],
-                outputs=[answer, topq, extinfo]
+        with gr.Group(elem_classes="section-box"):
+            with gr.Row():
+                llm_model = gr.Dropdown(
+                    ["mistral:7b", "gpt-3.5-turbo"],
+                    value="mistral:7b",
+                    label="LLM Model"
                 )
 
-        with gr.Row():
-            gr.Markdown("### Upload a File")
-            file_upload = gr.File(label="File", type="filepath")
-            query_input = gr.Textbox(label="Optional Question")
-            analyze_button = gr.Button("Analyze")
-            file_out = gr.Textbox(label="Summary", lines=6)
+        with gr.Group(elem_classes="section-box"):
+            with gr.Row():
+                qbox = gr.Textbox(label="Question", scale=3)
+                go = gr.Button("Answer", scale=1)
 
-# Optional Question is not doing anything now
-        analyze_button.click(analyze_file,
-                             inputs=[file_upload, query_input],
-                             outputs=file_out)
+        answer = gr.HTML(
+            "<div class='answer-box'><em>Answer will appear here...</em></div>",
+            label="Answer"
+        )
 
-        with gr.Column():
+        go.click(
+            lambda question, model: ask(question, 5,
+                "BAAI" if model.startswith("mistral") else "OpenAI Embeddings",
+                "BAAI/bge-m3" if model.startswith("mistral") else "text-embedding-3-large",
+                "Ollama" if model.startswith("mistral") else "OpenAI",
+                model),
+            inputs=[qbox, llm_model],
+            outputs=answer
+        )
+
+
+        with gr.Group(elem_classes="section-box"):
             gr.Markdown("### Top Queries")
-            gr.Textbox(value=top_queries(), interactive=False, lines=10)
+            gr.Textbox(value=top_queries(), interactive=False, lines=10, label="")
 
-        with gr.Column():
+        with gr.Group(elem_classes="section-box"):
             gr.Markdown("### County Outcome Map")
             metric_dd = gr.Dropdown(
                 choices=OUTCOME_METRICS,
                 value=OUTCOME_METRICS[0],
                 label="Metric")
-            county_dd = gr.Dropdown(
-                choices=COUNTIES,
-                multiselect=True,
-                label="Counties")
             map_plot = gr.Plot(label="Map")
             demo.load(plot_outcome_map,
-                      inputs=[metric_dd, county_dd],
+                      inputs=[metric_dd],
                       outputs=map_plot)
             metric_dd.change(plot_outcome_map,
-                             inputs=[metric_dd, county_dd],
+                             inputs=[metric_dd],
                              outputs=map_plot)
-            county_dd.change(plot_outcome_map,
-                             inputs=[metric_dd, county_dd],
-                               outputs=map_plot)
 
         gr.Image(
             "image/calworks_logo.jpeg",
@@ -102,7 +131,7 @@ def ui():
 
         demo.load(
             fn=lambda: init_engine(
-                "MiniLM",
+                "BAAI",
                 "BAAI/bge-m3",
                 "Ollama",
                 "mistral:7b"

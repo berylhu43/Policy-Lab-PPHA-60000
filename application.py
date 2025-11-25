@@ -11,7 +11,6 @@ from langchain_core.prompts import PromptTemplate
 from langchain_classic.chains.summarize import load_summarize_chain
 
 from langchain_classic.chains.llm import LLMChain
-from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document as LCDocument
 
 from langchain_community.llms import Ollama
@@ -19,6 +18,7 @@ from langchain_community.chat_models import ChatOpenAI
 from langchain_community.utilities import SerpAPIWrapper
 from chromadb.config import Settings
 import subprocess
+import textwrap
 
 
 # Load API keys
@@ -29,8 +29,10 @@ serp = SerpAPIWrapper() if SERPAPI_API_KEY else None
 
 # Configuration
 PERSIST_HF = "embedding/chroma_sip_csa_db[Huggingface Embedding]"
+PERSIST_JS = "embedding/chroma_jsonl_db[Huggingface Embedding]"
 PERSIST_OPENAI = "embedding/chroma_sip_csa_db[openai_embed3]"
-COLLECTION_NAME = "sip_csa_chunks"
+COLLECTION_1_NAME = "sip_csa_chunks"
+COLLECTION_2_NAME = "dashboard_json"
 QUERY_LOG_PATH = "query_log.json"
 TOP_K_DEFAULT = 5
 MAX_CHAR_LIMIT = 80000
@@ -50,12 +52,13 @@ Guidelines:
 4. Use short, factual paragraphs or bullet points. 
 5. When multiple counties are involved, group findings under clear headers for each county or show a structured comparison table.
 6. Do not invent information. If the data is missing or unclear, state that directly.
+7. If data from CSA (text) and Dashboard JSON contradict each other, DO NOT merge or average the findings.
+Instead, explain that the discrepancy is due to different time ranges and data definitions. Present both trends separately.
+8. Dashboard JSON typically covers quantitative trend data from 2018–2023, while CSA text may reference different reporting periods (often only 2019–2021 or a limited quarter range).
 
 Context:
 {context}
 
-External Info (if available):
-{external}
 
 User Context (instructions and query type):
 {user_context}
@@ -119,6 +122,27 @@ current_settings = {
     "llm_model": None
 }
 
+# def merged_search(query, k, retriever_sip, retriever_json):
+#     # retrieve from both db
+#     docs1 = retriever_sip.invoke(query)
+#     docs2 = retriever_json.invoke(query)
+#
+#     # add source name
+#     for d in docs1:
+#         d.metadata["source"] = "sip_csa"
+#
+#     for d in docs2:
+#         d.metadata["source"] = "dashboard_json"
+#
+#     # merge two search result
+#     merged = docs1 + docs2
+#
+#     # return in sorted score
+#     merged_sorted = sorted(merged, key=lambda d: d.metadata.get("score", 0), reverse=True)
+#
+#     # get top k
+#     return merged_sorted[:k]
+
 # Initialization function supporting Ollama and OpenAI
 def init_engine(embed_backend, embed_model, llm_backend, llm_model):
     '''Initialize engine suppporting Ollama and OpenAI
@@ -133,10 +157,10 @@ def init_engine(embed_backend, embed_model, llm_backend, llm_model):
         (None) updates the global variables retriever, summarizer and qa_chain
     '''
     # Update the global version of the variable
-    global retriever, summarizer, qa_chain
+    global retriever1, retriever2, summarizer, qa_chain
 
     # Use MiniLM if avaiable, otherwise use open AI
-    if embed_backend == "MiniLM":
+    if embed_backend == "BAAI":
         embedder = HuggingFaceEmbeddings(
             model_name=embed_model,
             model_kwargs={"device": "cpu"})
@@ -146,12 +170,23 @@ def init_engine(embed_backend, embed_model, llm_backend, llm_model):
             openai_api_key=OPENAI_API_KEY)
 
     # Set up retriever to vector database
-    store = Chroma(
-        collection_name=COLLECTION_NAME,
-        persist_directory=(PERSIST_HF if embed_backend == "MiniLM" else PERSIST_OPENAI),
+    store1 = Chroma(
+        collection_name=COLLECTION_1_NAME,
+        persist_directory=(PERSIST_HF if embed_backend == "BAAI" else PERSIST_OPENAI),
         embedding_function=embedder
 )
-    retriever = store.as_retriever()
+    store2 = Chroma(
+        collection_name=COLLECTION_2_NAME,
+        persist_directory=PERSIST_JS,
+        embedding_function=embedder
+    )
+
+    retriever1 = store1.as_retriever(search_type="similarity",
+                                     search_kwargs={"k": TOP_K_DEFAULT})
+    retriever2 = store2.as_retriever(search_type="similarity",
+                                     search_kwargs={"k": TOP_K_DEFAULT})
+
+
 
     if llm_backend == "OpenAI":
         llm = ChatOpenAI(
@@ -168,47 +203,44 @@ def init_engine(embed_backend, embed_model, llm_backend, llm_model):
 
 
 # Document summarization
-
 def summarize_docs(docs):
-    """For list of documents, summarize them into one single summary.
-
-    Inputs:
-        docs (list): List of documents to summarize
-
-    Returns (str) summary
-    """
+    """Summaries SIP/CSA + Dashboard JSON documents with correct headers."""
     pages = []
+
     for i, doc in enumerate(docs):
         meta = doc.metadata
-        header = f'''[{i+1}] {
-            meta.get('county','Unknown')
-            } | Section: {
-            meta.get('section','?')
-            }'''
-        pages.append(LCDocument(page_content=header+"\n"+doc.page_content))
+        source = meta.get("source", "")
+
+        if source == "sip_csa":
+            header = (
+                f"[{i+1}] {meta.get('county', 'Unknown')} | "
+                f"Section: {meta.get('section', '?')} | "
+                f"Page: {meta.get('page', '?')}"
+            )
+
+        elif source == "dashboard_json":
+            header = (
+                f"[{i+1}] {meta.get('county', 'Unknown')} | "
+                f"Indicator: {meta.get('indicator', 'Unknown')} | "
+                f"Category: {meta.get('category', 'Unknown')} | "
+                f"Subcategory: {meta.get('subcategory', 'Unknown')}"
+            )
+
+        else:
+            header = f"[{i+1}] {meta.get('county', 'Unknown')} | Unknown Source"
+
+        pages.append(
+            LCDocument(page_content=header + "\n" + doc.page_content)
+        )
+
     return summarizer.invoke({"input_documents": pages})["output_text"]
 
-
-# File analysis (text only)
-
-def extract_text_from_file(path):
-    return open(path, 'r').read()
-
-
-def analyze_file(file_path, query=""):
-    '''Analyze the file (currently only returns the text in the file?)'''
-    # i think this function only return the first 80000 characters now
-    # definitely need to be improved
-    text = extract_text_from_file(file_path)
-    return text[:MAX_CHAR_LIMIT]
 
 
 # Main QA function
 def ask(
         query,
         k,
-        use_ext,
-        ext_query,
         embed_backend,
         embed_model,
         llm_backend,
@@ -260,43 +292,118 @@ def ask(
         query_type = "multi"
     else:
         query_type = "unspecified"
+    #
+    # docs_sip = retriever1.invoke(query)
+    # docs_json = retriever2.invoke(query)
 
-    retriever.search_kwargs = {"k": k}
+
+    docs_sip_with_score = retriever1.vectorstore.similarity_search_with_score(query, k=k)
+    docs_json_with_score = retriever2.vectorstore.similarity_search_with_score(query, k=k)
+
+    query_lower = query.lower()
+
+    QUANT_KEYWORDS = [
+        "trend", "trends", "over time", "change", "changes", "rate", "rates",
+        "increase", "decrease", "improve", "decline", "growth", "drop"
+    ]
+    use_quant = any(k in query_lower for k in QUANT_KEYWORDS)
+
+    GROUP_KEYWORDS = {
+        "gender": ["gender", "female", "women", "man", "male"],
+        "au_type": ["au type", "all other", "two parent", "non moe", "tanf timed_out"],
+        "language": ["language", "english", "other language", "spanish"],
+        "race": ["race", "white", "asian", "black", "hispanic", "other race", "native american"],
+        "total": ["total", "overall", "total"]
+    }
+    mentioned_group = None
+    for group, keys in GROUP_KEYWORDS.items():
+        if any(k in query_lower for k in keys):
+            mentioned_group = group
+            break
+
+    docs_sip = []
+    for d, score in docs_sip_with_score:
+        d.metadata["_distance"] = score
+        docs_sip.append(d)
+
+    docs_json = []
+    for d, score in docs_json_with_score:
+        if use_quant:
+            if mentioned_group:
+                if d.metadata.get("category","").lower() == mentioned_group:
+                    d.metadata["_distance"] = score * 0.8
+                else:
+                    d.metadata["_distance"] = score
+            else:
+                if d.metadata.get("category","").lower() == "total":
+                    d.metadata["_distance"] = score * 0.8
+        else:
+            d.metadata["_distance"] = score
+
+        docs_json.append(d)
+
+
+    for d in docs_sip:
+        d.metadata["source"] = "sip_csa"
+    for d in docs_json:
+        d.metadata["source"] = "dashboard_json"
+
+    print("\n=== DEBUG JSON FULL METADATA ===")
+    for d in docs_json[:3]:
+        print(d.metadata)
+
+    print("\n=== DEBUG CSA FULL METADATA ===")
+    for d in docs_sip[:3]:
+        print(d.metadata)
+
+    merged_docs = docs_sip + docs_json
+
+    def sim(doc):
+        return doc.metadata.get("_distance", 999)
+
+    merged_docs = sorted(merged_docs, key=sim)
+    docs = merged_docs[:k]
+
 
     if query_type == "single":
-        county = mentioned[0]
-        filter_fn = lambda doc: doc.metadata.get("county", "").lower() == county.lower()
-        docs = [d for d in retriever.invoke(query) if filter_fn(d)]
+        county = mentioned[0].lower()
+        docs = [d for d in docs if d.metadata.get("county", "").lower() == county]
         summary = summarize_docs(docs)
 
     elif query_type == "multi":
-        docs = retriever.invoke(query)
-        # Optional: group by county for later structured summary
         docs_by_county = defaultdict(list)
         for d in docs:
             docs_by_county[d.metadata.get("county", "Unknown")].append(d)
-        # For each county, summarize its documents individually
+
         county_summaries = []
         for county, county_docs in docs_by_county.items():
             summary_text = summarize_docs(county_docs)
             county_summaries.append(f"County: {county}\n{summary_text}")
-        # Concatenate the county summaries into a structured context string
         summary = "\n\n".join(county_summaries)
+
     else:
-        docs = retriever.invoke(query)
         summary = summarize_docs(docs)
 
     print("\n=== Retrieved Chunks ===")
     for d in docs:
         meta = d.metadata
-        print("Full metadata:", meta)
-        print(
-            f"chunk_id={meta.get('chunk_id')}, "
-            f"county={meta.get('county')}, "
-            f"section={meta.get('section')}, "
-            f"page={meta.get('page')}"
-        )
-    print("=== End Retrieved Chunks ===\n")
+        if d.metadata["source"] == "dashboard_json":
+            print(
+                f"sheet={meta.get('indicator')}, "
+                f"county={meta.get('county')}, "
+                f"category={meta.get('category')}, "
+                f"subcategory={meta.get('subcategory')}"
+            )
+        elif d.metadata["source"] == "sip_csa":
+            print(
+                f"chunk_id={meta.get('chunk_id')}, "
+                f"county={meta.get('county')}, "
+                f"section={meta.get('section')}, "
+                f"page={meta.get('page')}"
+            )
+        else:
+            print("Unknown source, minimal metadata:")
+            print(f"county={meta.get('county')}")
 
     if not docs:
       # better communication to users?
@@ -309,20 +416,9 @@ def ask(
     }[query_type]
 
 
-    external = ""
-    if use_ext:
-        if not serp:
-            external = "[Web search disabled]"
-        elif ext_query:
-            try:
-                external = serp.run(ext_query)
-            except Exception as e:
-                external = f"[Web search error: {e}]"
-
     resp = qa_chain.run({
         "context": clean_text(summary),
         "question": clean_text(query),
-        "external": clean_text(external),
         "user_context": f"Query type: {query_type}. {task_instruction} | Counties: {', '.join(mentioned) or 'unspecified'}"
     })
     resp = denormalize_text(resp)
@@ -332,7 +428,8 @@ def ask(
     save_log(log)
 
     excerpts = "\n\n---\n\n".join([
-        f'''[{i+1}] 📍 {
+        textwrap.dedent
+        (f'''[{i+1}] 📍 {
             doc.metadata.get('county', 'Unknown')
             } | {
             doc.metadata.get('report_type', 'Unknown')
@@ -341,10 +438,31 @@ def ask(
             } | Page {
             doc.metadata.get('page', '?')
             }\n{doc.page_content.strip()}'''
+        if doc.metadata["source"] == "sip_csa"
+        else
+        f'''[{i+1}] 📍 {
+            doc.metadata.get('county', 'Unknown')
+            } | Cal-OAR Dashboard | Indicator: {
+            doc.metadata.get('indicator', 'Unknown')
+            } | Category {
+            doc.metadata.get('category', 'Unknown')
+            } | Subcategory {
+            doc.metadata.get('subcategory', 'Unknown')
+            } \n{doc.page_content.strip()}'''
+    )
         for i, doc in enumerate(docs)
     ])
 
     excerpts = denormalize_text(excerpts)
 
-    full_response = resp.strip() + "\n\n📚 Used Excerpts:\n\n" + excerpts
-    return full_response, top_queries(), external.strip()
+    full_response = (
+        f"<div style='font-size:18px; line-height:1.6;'>"
+        f"{resp.strip()}"
+        "<h3>📚 Used Excerpts:</h3>"
+        "<pre style='white-space:pre-wrap; font-size:16px;'>"
+        f"{excerpts}"
+        "</pre>"
+        "</div>"
+    )
+
+    return full_response

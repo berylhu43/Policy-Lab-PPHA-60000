@@ -6,8 +6,6 @@ import statsmodels.api as sm
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 XLSX_PATH = os.path.join(BASE_DIR, '..', 'data', 'dashboard_raw_data.xlsx')
-OUTPUT_DIR = os.path.join(BASE_DIR, '..', 'data', 'dataframe')
-COLLECTION = "dashboard_df"
 
 county_names = [
     "California", "Alameda", "Alpine", "Amador", "Butte", "Calaveras", "Colusa", "Contra Costa",

@@ -27,10 +27,8 @@ OUTCOME_METRICS = [
 COUNTIES = sorted(map_df['County'].unique())
 
 # Plot callback with optional county filter
-def plot_outcome_map(metric, selected_counties):
+def plot_outcome_map(metric):
     df = map_df.copy()
-    if selected_counties:
-        df = df[df['County'].isin(selected_counties)]
 
     color_map = {
     "low": "#d62728",     # red → poor outcome

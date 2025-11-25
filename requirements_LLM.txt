@@ -19,7 +19,6 @@ pymupdf-layout == 1.26.6
 
 
 
-langchain-core~=1.0.2
 google~=3.0.0
 protobuf~=6.33.0
 
