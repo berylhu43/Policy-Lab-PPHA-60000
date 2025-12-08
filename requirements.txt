@@ -34,5 +34,6 @@ pymupdf4llm==0.2.0
 statsmodels==0.14.5
 torch==2.9.0
 transformers==4.57.1
+sentence-transformers==5.1.2
 
 

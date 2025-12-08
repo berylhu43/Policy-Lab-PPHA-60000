@@ -1,7 +1,6 @@
 import os
 import json
 import re
-from pipeline.extraction_pdf import county_names
 from pipeline.load_xl import denormalize_text
 from datetime import datetime
 from collections import defaultdict
@@ -24,8 +23,7 @@ import textwrap
 # Load API keys
 os.environ["OPENAI_API_KEY"] = ""
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
-serp = SerpAPIWrapper() if SERPAPI_API_KEY else None
+
 
 # Configuration
 PERSIST_HF = "embedding/chroma_sip_csa_db[Huggingface Embedding]"
@@ -36,6 +34,18 @@ COLLECTION_2_NAME = "dashboard_json"
 QUERY_LOG_PATH = "query_log.json"
 TOP_K_DEFAULT = 5
 MAX_CHAR_LIMIT = 80000
+
+county_names = [
+    "Alameda", "Alpine", "Amador", "Butte", "Calaveras", "Colusa", "Contra Costa",
+    "Del Norte", "El Dorado", "Fresno", "Glenn", "Humboldt", "Imperial", "Inyo",
+    "Kern", "Kings", "Lake", "Lassen", "Los Angeles", "Madera", "Marin", "Mariposa",
+    "Mendocino", "Merced", "Modoc", "Mono", "Monterey", "Napa", "Nevada", "Orange",
+    "Placer", "Plumas", "Riverside", "Sacramento", "San Benito", "San Bernardino",
+    "San Diego", "San Francisco", "San Joaquin", "San Luis Obispo", "San Mateo",
+    "Santa Barbara", "Santa Clara", "Santa Cruz", "Shasta", "Sierra", "Siskiyou",
+    "Solano", "Sonoma", "Stanislaus", "Sutter", "Tehama", "Trinity", "Tulare",
+    "Tuolumne", "Ventura", "Yolo", "Yuba"
+]
 
 # Prompt template
 # we can improve the template

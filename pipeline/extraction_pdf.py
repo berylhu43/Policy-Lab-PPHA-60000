@@ -4,11 +4,12 @@ import pymupdf
 import pymupdf.layout
 import pymupdf4llm
 import pandas as pd
+import json
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PDF_DIRECTORY = "/Users/yuxuanhu/gdrive/CalWorks/Vector Database/PDFs"  # Set this to your PDF folder path
+PDF_DIRECTORY = ""  # Set this to your PDF folder path
 OUTPUT_DIRECTORY = os.path.join(BASE_DIR, "..", "data", "chunked_sip_output.xlsx") # Define output directory
 
 county_names = [
@@ -114,7 +115,7 @@ def table_to_markdown(table):
     return "\n".join(lines)
 
 def extract_sections_with_layout(pdf_path, county, report_type):
-    import json
+
     doc = pymupdf.open(pdf_path)
 
     try:
